@@ -11,6 +11,7 @@ typedef struct
 	int32_t Viewport[4];
 	GLuint VBO;
 	GLuint VAO;
+	GLuint Program;
 #define X 256
 #define Y 256
 	uint32_t TextureCache[Y * 16][X * 16];//2048

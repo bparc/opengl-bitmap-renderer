@@ -127,6 +127,48 @@ static void PushTexturedRectangle(renderer_t* state, float x, float y, float wid
 	}
 }
 
+static GLuint CompileShader(GLenum type, const char* source)
+{
+	GLuint result = glCreateShader(type);
+	glShaderSource(result, 1, &source, 0);
+	glCompileShader(result);
+	GLint status;
+	glGetShaderiv(result, GL_COMPILE_STATUS, &status);
+	if ((status == GL_FALSE))
+	{
+		char infoLog[256] = "";
+		glGetShaderInfoLog(result, sizeof(infoLog), 0, infoLog);
+		printf("%s\n", infoLog);
+	}
+	return result;
+}
+
+static GLuint CompileProgram(const char* vertexSource, const char *fragmentSource)
+{
+	GLuint shaders[2] =
+	{
+		CompileShader(GL_VERTEX_SHADER,vertexSource),
+		CompileShader(GL_FRAGMENT_SHADER,fragmentSource),
+	};
+	GLuint result = glCreateProgram();
+	glAttachShader(result, shaders[0]);
+	glAttachShader(result, shaders[1]);
+	glLinkProgram(result);
+	glDeleteShader(shaders[0]);
+	glDeleteShader(shaders[1]);
+	GLint status;
+	glGetProgramiv(result, GL_LINK_STATUS, &status);
+	if ((status == GL_FALSE))
+	{
+		char infoLog[256] = "";
+		glGetProgramInfoLog(result, sizeof(infoLog), 0, infoLog);
+		printf("%s\n", infoLog);
+		glDeleteProgram(result);
+		result = 0;
+	}
+	return result;
+}
+
 extern void BeginSubView(renderer_t* state,int32_t viewport[4], int32_t flags)
 {
 	if ((state->MemoryInitialized == 0))
@@ -137,22 +179,13 @@ extern void BeginSubView(renderer_t* state,int32_t viewport[4], int32_t flags)
 
 		glBindVertexArray(state->VAO);
 		glBindBuffer(GL_ARRAY_BUFFER, state->VBO);
-		glEnableClientState(GL_VERTEX_ARRAY);
-		glVertexPointer(2, GL_FLOAT, (sizeof(GLfloat) * STRIDE), 0);
 		glClientActiveTexture(GL_TEXTURE0);
-		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-		glTexCoordPointer(2, GL_FLOAT, (sizeof(GLfloat) * STRIDE), (const void*)(sizeof(GLfloat) * 2));
-		glEnableClientState(GL_COLOR_ARRAY);
-		glColorPointer(4, GL_FLOAT, (sizeof(GLfloat) * STRIDE), (const void*)(sizeof(GLfloat) * 4));
-
-#if 0
 		glEnableVertexAttribArray(0);
 		glEnableVertexAttribArray(1);
 		glEnableVertexAttribArray(3);
 		glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, (sizeof(GLfloat) * STRIDE), 0);
 		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, (sizeof(GLfloat) * STRIDE), (const void*)(sizeof(GLfloat) * 2));
 		glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, (sizeof(GLfloat) * STRIDE), (const void*)(sizeof(GLfloat) * 4));
-#endif
 #define X 128
 #define Y 48
 			static uint32_t _glyphs[Y][X];
@@ -167,11 +200,38 @@ extern void BeginSubView(renderer_t* state,int32_t viewport[4], int32_t flags)
 			state->Font = CreateBitmap(state, &_glyphs[0][0], X, Y);
 #undef X
 #undef Y
+			state->Program = CompileProgram(
+				"\
+				#version 330 core\n\
+				uniform mat4 Transform;\
+				layout (location = 0) in vec2 VertexPosition;\
+				layout (location = 1) in vec2 VertexUV;\
+				layout (location = 3) in vec4 VertexColor;\
+				out vec4 Color;\
+				out vec2 UV;\
+				void main()\
+				{\
+				Color = VertexColor;\
+				UV = VertexUV;\
+				gl_Position = vec4(VertexPosition.x,VertexPosition.y,\
+				0.0,1.0) * Transform;\
+				}",
+				"\
+				#version 330 core\n\
+				out vec4 PixelColor;\
+				in vec2 UV;\
+				in vec4 Color;\
+				uniform sampler2D Texture;\
+				void main()\
+				{\
+				PixelColor = texture(Texture, UV) * Color;\
+				}"
+				);
+		assert(state->Program);
 		state->MemoryInitialized = TRUE;
 	}
 	if (state->SetCacheDirty)
 	{
-
 		glBindTexture(GL_TEXTURE_2D, state->TextureHandle);
 		int32_t sizeX = GetArraySize(state->TextureCache[0]);
 		int32_t sizeY = GetArraySize(state->TextureCache);
@@ -208,18 +268,22 @@ extern void OutputRenderCommands(renderer_t* state)
 	float D = +1;
 	GLfloat M[4][4] =
 	{
-		A,0,0,0,
-		0,B,0,0,
+		A,0,0,C,
+		0,B,0,D,
 		0,0,1,0,
-		C,D,0,1,
+		0,0,0,1,
 	};
-	glLoadMatrixf(&M[0][0]);
+	glUniform1i(glGetUniformLocation(state->Program, "Texture"), 0);
+	glUniformMatrix4fv(glGetUniformLocation(state->Program, "Transform"), 1,
+		GL_FALSE, &M[0][0]);
 #if 1
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, state->TextureHandle);
+	glUseProgram(state->Program);
 	glEnable(GL_BLEND);
 	glEnable(GL_TEXTURE_2D);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, state->TextureHandle);
 	glBindBuffer(GL_ARRAY_BUFFER, state->VBO);
 	glBindVertexArray(state->VAO);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat)*state->Offset, state->Vertices, GL_STATIC_DRAW);
